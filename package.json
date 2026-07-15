@@ -22,13 +22,13 @@
     "discord-api-types": "^0.38.49",
     "discord.js": "^14.26.5",
     "distube": "^5.2.3",
-    "dotenv": "^17.4.2",
     "ffmpeg-static": "^5.3.0",
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
     "yt-search": "^2.13.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "dotenv": "^17.4.2"
   }
 }

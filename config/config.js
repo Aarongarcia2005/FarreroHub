@@ -1,5 +1,10 @@
-require("dotenv").config();
+// Load local .env only in non-production environments so Railway
+// (or any production platform) can provide env vars directly.
+if (process.env.NODE_ENV !== "production") {
+    require("dotenv").config(); // dev-only
+}
 
+// Export configuration using `process.env` directly. Avoid hardcoded tokens.
 module.exports = {
     token: process.env.DISCORD_TOKEN || process.env.TOKEN,
     clientId: process.env.CLIENT_ID,

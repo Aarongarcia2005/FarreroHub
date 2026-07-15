@@ -8,7 +8,9 @@ module.exports = {
     console.log("==================================");
     console.log("🩷 FARRERO HUB");
     console.log("==================================");
+    // Added explicit production-friendly connection message
     console.log(`✅ Bot conectado: ${client.user.tag}`);
+    console.log(`Bot conectado como ${client.user.tag}`);
     console.log(`📦 Comandos cargados: ${client.commands.size}`);
     console.log(`🎛️ Botones cargados: ${client.buttons.size}`);
     console.log(`🎵 Sistema música OK`);
