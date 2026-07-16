@@ -128,6 +128,33 @@ const spawnJson = async (url, flags = {}) => {
   const filePath = await ensureYtDlpBinary();
   const projBin = join(process.cwd(), "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
   const args = toYtDlpArgs(url, flags);
+  // If there's a cookies file at project root or specified via env, prefer it to avoid captchas
+  try {
+    const envCookies = process.env.YTDLP_COOKIES;
+    const envCookiesContent = process.env.YTDLP_COOKIES_CONTENT;
+    const defaultCookies = join(process.cwd(), "cookies.txt");
+
+    // If YTDLP_COOKIES_CONTENT is set (Railway env), write it to cookies.txt
+    if (envCookiesContent && !existsSync(defaultCookies)) {
+      try {
+        await fsPromises.writeFile(defaultCookies, envCookiesContent, { encoding: 'utf8', mode: 0o600 });
+        console.log('[YtDlpPlugin] Wrote cookies.txt from YTDLP_COOKIES_CONTENT env var');
+      } catch (e) {
+        console.error('[YtDlpPlugin] Failed to write cookies.txt from env content', e);
+      }
+    }
+
+    const cookiesPath = envCookies || (existsSync(defaultCookies) ? defaultCookies : null);
+    if (cookiesPath) {
+      // only add if not already provided
+      if (!flags.cookies) {
+        args.push("--cookies", cookiesPath);
+      }
+      console.log(`[YtDlpPlugin] Using cookies file: ${cookiesPath}`);
+    }
+  } catch (e) {
+    // ignore
+  }
 
   // Log which executable and args we're using to help debug environments
   try {
