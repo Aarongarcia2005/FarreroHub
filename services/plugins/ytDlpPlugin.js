@@ -2,9 +2,11 @@ const { spawn } = require("child_process");
 const { join, dirname } = require("path");
 const { existsSync } = require("fs");
 const { Playlist, PlayableExtractorPlugin, Song, DisTubeError } = require("distube");
+const ytdlCore = require("@distube/ytdl-core");
 const { download } = require("@distube/yt-dlp");
 
 const isPlaylist = (info) => Array.isArray(info?.entries);
+const playdl = require("play-dl");
 
 const toYtDlpArgs = (url, flags = {}) => {
   const args = [url];
@@ -180,11 +182,49 @@ const spawnJson = async (url, flags = {}) => {
         const start = onlyJson.indexOf("{");
         const end = onlyJson.lastIndexOf("}");
         const jsonText = start >= 0 && end > start ? onlyJson.slice(start, end + 1) : onlyJson;
+        if (!jsonText) throw new Error("empty-output");
         resolve(JSON.parse(jsonText));
       } catch (parseError) {
+        console.error('[YtDlpPlugin] Failed to parse JSON from yt-dlp', { stdout: output.trim(), stderr: errorOutput.trim() });
+        // Fallback: if URL is YouTube, try using @distube/ytdl-core to get info
+        try {
+          const isYoutube = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+          if (isYoutube) {
+            console.log('[YtDlpPlugin] Falling back to @distube/ytdl-core for YouTube URL');
+            (async () => {
+              try {
+                const info = await ytdlCore.getInfo(url);
+                const vd = info.videoDetails || {};
+                const built = {
+                  extractor: 'youtube',
+                  id: vd.videoId || vd.video_url || vd.id,
+                  title: vd.title || vd.fulltitle,
+                  fulltitle: vd.title || vd.fulltitle,
+                  webpage_url: `https://www.youtube.com/watch?v=${vd.videoId || vd.video_url || vd.id}`,
+                  original_url: url,
+                  is_live: vd.isLive || false,
+                  thumbnail: vd.thumbnails?.[vd.thumbnails.length - 1]?.url,
+                  thumbnails: vd.thumbnails,
+                  duration: Number(vd.lengthSeconds) || 0,
+                  uploader: vd.author?.name,
+                  uploader_url: vd.author?.channel_url,
+                  view_count: Number(vd.viewCount) || 0
+                };
+                resolve(built);
+                return;
+              } catch (e) {
+                console.error('[YtDlpPlugin] ytdl-core fallback failed', e);
+                // fall through to return original error
+              }
+            })();
+            return;
+          }
+        } catch (fbErr) {
+          console.error('[YtDlpPlugin] Fallback check failed', fbErr);
+        }
+
         const e = new Error(`Failed to parse yt-dlp JSON output. stderr: ${errorOutput.trim()} stdout: ${output.trim()}`);
         e.debug = { stdout: output.trim(), stderr: errorOutput.trim() };
-        console.error('[YtDlpPlugin] Failed to parse JSON from yt-dlp', e.debug);
         reject(e);
       }
     });
@@ -290,6 +330,20 @@ class YtDlpPlugin extends PlayableExtractorPlugin {
 
     if (isPlaylist(info)) {
       throw new DisTubeError("YTDLP_ERROR", "No se puede obtener la URL de reproducción de una playlist.");
+    }
+
+    if (info.url) return info.url;
+
+    // Fallback: try using play-dl to get a readable stream for YouTube URLs
+    try {
+      if (/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(song.url)) {
+        console.log('[YtDlpPlugin] Falling back to play-dl stream for', song.url);
+        const r = await playdl.stream(song.url);
+        // r.stream is a readable stream which DisTube/FFmpeg can accept
+        return r.stream;
+      }
+    } catch (e) {
+      console.error('[YtDlpPlugin] play-dl fallback failed', e);
     }
 
     return info.url;
