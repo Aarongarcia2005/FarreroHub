@@ -3,6 +3,13 @@ const { join, dirname } = require("path");
 const { existsSync } = require("fs");
 const { Playlist, PlayableExtractorPlugin, Song, DisTubeError } = require("distube");
 const ytdlCore = require("@distube/ytdl-core");
+// Common user-agents to try in case YouTube blocks default requests
+const UA_LIST = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:116.0) Gecko/20100101 Firefox/116.0'
+];
 const { download } = require("@distube/yt-dlp");
 
 const isPlaylist = (info) => Array.isArray(info?.entries);
@@ -351,7 +358,15 @@ class YtDlpPlugin extends PlayableExtractorPlugin {
       if (isYouTube) {
         try {
           // Try play-dl first (no external binaries)
-          const pdInfo = await playdl.video_info(url).catch(() => null);
+          let pdInfo = null;
+          for (const ua of UA_LIST) {
+            try {
+              pdInfo = await playdl.video_info(url, { requestOptions: { headers: { 'user-agent': ua, referer: 'https://www.youtube.com/', 'accept-language': 'en-US,en;q=0.9' } } });
+              if (pdInfo && pdInfo.video_details) break;
+            } catch (e) {
+              // try next ua
+            }
+          }
           if (pdInfo && pdInfo.video_details) {
             const vd = pdInfo.video_details;
             const built = {
@@ -373,7 +388,15 @@ class YtDlpPlugin extends PlayableExtractorPlugin {
           }
 
           // Fallback to @distube/ytdl-core metadata (no external binaries)
-          const infoCore = await ytdlCore.getInfo(url).catch(() => null);
+          let infoCore = null;
+          for (const ua of UA_LIST) {
+            try {
+              infoCore = await ytdlCore.getInfo(url, { requestOptions: { headers: { 'user-agent': ua, referer: 'https://www.youtube.com/', 'accept-language': 'en-US,en;q=0.9' } } });
+              if (infoCore && infoCore.videoDetails) break;
+            } catch (e) {
+              // try next ua
+            }
+          }
           if (infoCore && infoCore.videoDetails) {
             const vd = infoCore.videoDetails;
             const built = {
