@@ -86,6 +86,23 @@ class MusicService {
         }
       }
 
+      // If there's an existing voice connection not managed by DisTube, destroy it so DisTube can create its own
+      try {
+        const { getVoiceConnection } = require("@discordjs/voice");
+        const existing = getVoiceConnection(interaction.guild.id);
+        const hasQueue = !!this.distube.getQueue(interaction.guild.id);
+        if (existing && !hasQueue) {
+          console.log("[MusicService] Found existing voice connection not managed by DisTube, destroying it.");
+          try {
+            existing.destroy();
+          } catch (e) {
+            console.error("[MusicService] Error destroying existing voice connection:", e);
+          }
+        }
+      } catch (e) {
+        console.error("[MusicService] Error checking existing voice connection:", e);
+      }
+
       await this.distube.play(voiceChannel, source, {
         member: interaction.member,
         textChannel: interaction.channel,
