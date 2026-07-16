@@ -230,7 +230,28 @@ const spawnJson = async (url, flags = {}) => {
             console.log('[YtDlpPlugin] Falling back to @distube/ytdl-core for YouTube URL');
             (async () => {
               try {
-                const info = await ytdlCore.getInfo(url);
+                // Try to read cookies from env content or cookies.txt to bypass YouTube sign-in
+                let cookieHeader = null;
+                try {
+                  if (process.env.YTDLP_COOKIES_CONTENT) {
+                    cookieHeader = process.env.YTDLP_COOKIES_CONTENT;
+                  } else {
+                    const cookieFile = join(process.cwd(), 'cookies.txt');
+                    if (existsSync(cookieFile)) {
+                      cookieHeader = (await fsPromises.readFile(cookieFile, 'utf8')).trim();
+                    }
+                  }
+                } catch (r) {
+                  console.warn('[YtDlpPlugin] Failed to read cookies file for ytdl-core fallback', r);
+                }
+
+                const requestOptions = {};
+                if (cookieHeader) {
+                  requestOptions.headers = { cookie: cookieHeader, 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
+                  console.log('[YtDlpPlugin] Using cookies for ytdl-core fallback');
+                }
+
+                const info = await ytdlCore.getInfo(url, { requestOptions });
                 const vd = info.videoDetails || {};
                 const built = {
                   extractor: 'youtube',
@@ -251,6 +272,12 @@ const spawnJson = async (url, flags = {}) => {
                 return;
               } catch (e) {
                 console.error('[YtDlpPlugin] ytdl-core fallback failed', e);
+                // If it's a sign-in/captcha error, give a clear actionable message
+                const msg = (e && e.message) || '';
+                if (/sign in to confirm|captcha|unrecoverable/i.test(msg) || (e?.statusCode === 429)) {
+                  const hint = 'YouTube requires sign-in or your IP is rate-limited. Set the environment variable YTDLP_COOKIES_CONTENT with your cookies.txt contents on Railway, or install Python3 and yt-dlp on the host.';
+                  console.error('[YtDlpPlugin] ytdl-core indicates sign-in or rate-limit. Hint:', hint);
+                }
                 // fall through to return original error
               }
             })();
@@ -318,6 +345,63 @@ class YtDlpPlugin extends PlayableExtractorPlugin {
   }
 
   async resolve(url, options) {
+    // Prefer pure-Node extraction for YouTube to avoid external binaries and cookies
+    try {
+      const isYouTube = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+      if (isYouTube) {
+        try {
+          // Try play-dl first (no external binaries)
+          const pdInfo = await playdl.video_info(url).catch(() => null);
+          if (pdInfo && pdInfo.video_details) {
+            const vd = pdInfo.video_details;
+            const built = {
+              extractor: 'youtube',
+              id: vd.id || vd.videoId,
+              title: vd.title || vd.name,
+              fulltitle: vd.title || vd.name,
+              webpage_url: vd.url || url,
+              original_url: url,
+              is_live: vd.is_live || vd.live || false,
+              thumbnail: vd.thumbnails?.[vd.thumbnails.length - 1]?.url || vd.thumbnail,
+              thumbnails: vd.thumbnails || (vd.thumbnail ? [{ url: vd.thumbnail }] : []),
+              duration: Number(vd.durationInSec || vd.duration || 0) || 0,
+              uploader: vd.uploader || vd.channel || (vd.owner?.name),
+              uploader_url: vd.channel_url || vd.uploader_url,
+              view_count: Number(vd.views) || Number(vd.viewCount) || 0
+            };
+            return new YtDlpSong(this, built, options);
+          }
+
+          // Fallback to @distube/ytdl-core metadata (no external binaries)
+          const infoCore = await ytdlCore.getInfo(url).catch(() => null);
+          if (infoCore && infoCore.videoDetails) {
+            const vd = infoCore.videoDetails;
+            const built = {
+              extractor: 'youtube',
+              id: vd.videoId || vd.video_url || vd.id,
+              title: vd.title || vd.fulltitle,
+              fulltitle: vd.title || vd.fulltitle,
+              webpage_url: `https://www.youtube.com/watch?v=${vd.videoId || vd.video_url || vd.id}`,
+              original_url: url,
+              is_live: vd.isLive || false,
+              thumbnail: vd.thumbnails?.[vd.thumbnails.length - 1]?.url,
+              thumbnails: vd.thumbnails,
+              duration: Number(vd.lengthSeconds) || 0,
+              uploader: vd.author?.name,
+              uploader_url: vd.author?.channel_url,
+              view_count: Number(vd.viewCount) || 0
+            };
+            return new YtDlpSong(this, built, options);
+          }
+        } catch (e) {
+          console.warn('[YtDlpPlugin] YouTube pure-node extraction failed, falling back to yt-dlp binary', e?.message || e);
+        }
+      }
+    } catch (e) {
+      console.error('[YtDlpPlugin] Error checking YouTube extraction path', e);
+    }
+
+    // For non-YouTube or if node extraction failed, use yt-dlp binary as before
     const info = await spawnJson(url, {
       dumpSingleJson: true,
       noWarnings: true,
