@@ -32,18 +32,46 @@ const getYtDlpPath = () => {
   return join(moduleDir, "..", "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
 };
 
+const { spawnSync } = require("child_process");
+
 const ensureYtDlpBinary = async () => {
   const filePath = getYtDlpPath();
+  const projBin = join(process.cwd(), "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
 
-  if (!existsSync(filePath)) {
-    await download().catch(() => void 0);
+  // If local project binary exists (./bin/yt-dlp or ./bin/yt-dlp.exe), prefer it
+  if (existsSync(projBin)) return projBin;
+
+  // If bundled binary exists, use it
+  if (existsSync(filePath)) return filePath;
+
+  // Try to find yt-dlp in PATH (yt-dlp or yt-dlp.exe on Windows)
+  try {
+    const checkCmd = process.platform === "win32" ? "where" : "which";
+    const proc = spawnSync(checkCmd, [process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp"]);
+    if (proc.status === 0 && proc.stdout) {
+      const found = proc.stdout.toString().split(/\r?\n/)[0].trim();
+      if (found) return found;
+    }
+  } catch (e) {
+    // ignore
   }
 
-  if (!existsSync(filePath)) {
-    throw new Error("No se encontró el ejecutable de yt-dlp. Ejecuta npm install de nuevo o revisa la instalación de @distube/yt-dlp.");
+  // Try generic command name (in case the shell resolves it)
+  try {
+    const proc2 = spawnSync(process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp", ["--version"], { stdio: "ignore" });
+    if (proc2.status === 0) return process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  } catch (e) {
+    // ignore
   }
 
-  return filePath;
+  // Attempt to download bundled binary
+  await download().catch(() => void 0);
+
+  if (existsSync(filePath)) return filePath;
+
+  throw new Error(
+    "No se encontró el ejecutable de yt-dlp. Instala Python y yt-dlp, o coloca un ejecutable de yt-dlp en PATH. Alternativamente, reinstala @distube/yt-dlp."
+  );
 };
 
 const spawnJson = async (url, flags = {}) => {
