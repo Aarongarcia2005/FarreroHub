@@ -128,6 +128,16 @@ const spawnJson = async (url, flags = {}) => {
   const filePath = await ensureYtDlpBinary();
   const projBin = join(process.cwd(), "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
   const args = toYtDlpArgs(url, flags);
+  // If a proxy is provided via env (useful on hosts like Railway), forward it to yt-dlp
+  try {
+    const proxy = process.env.YTDLP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+    if (proxy && !flags.proxy) {
+      args.push("--proxy", proxy);
+      console.log(`[YtDlpPlugin] Using proxy from env for yt-dlp: ${proxy}`);
+    }
+  } catch (e) {
+    // ignore
+  }
   // If there's a cookies file at project root or specified via env, prefer it to avoid captchas
   try {
     const envCookies = process.env.YTDLP_COOKIES;
