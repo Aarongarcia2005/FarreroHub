@@ -33,6 +33,8 @@ const getYtDlpPath = () => {
 };
 
 const { spawnSync } = require("child_process");
+const https = require("https");
+const { promises: fsPromises } = require("fs");
 
 const ensureYtDlpBinary = async () => {
   const filePath = getYtDlpPath();
@@ -74,8 +76,55 @@ const ensureYtDlpBinary = async () => {
   );
 };
 
+const downloadOfficialYtDlp = async (dest) => {
+  const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp${process.platform === "win32" ? ".exe" : ""}`;
+  const tmp = `${dest}.tmp`;
+
+  await fsPromises.mkdir(require("path").dirname(dest), { recursive: true });
+
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        // follow redirect
+        https.get(res.headers.location, (r2) => {
+          const file = require("fs").createWriteStream(tmp);
+          r2.pipe(file);
+          file.on("finish", async () => {
+            file.close();
+            try {
+              await fsPromises.rename(tmp, dest);
+              await fsPromises.chmod(dest, 0o755);
+              resolve(dest);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        }).on("error", reject);
+        return;
+      }
+
+      if (res.statusCode !== 200) return reject(new Error(`Download failed: ${res.statusCode}`));
+      const file = require("fs").createWriteStream(tmp);
+      res.pipe(file);
+      file.on("finish", async () => {
+        file.close();
+        try {
+          await fsPromises.rename(tmp, dest);
+          await fsPromises.chmod(dest, 0o755);
+          resolve(dest);
+        } catch (e) {
+          reject(e);
+        }
+      });
+      file.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+};
+
 const spawnJson = async (url, flags = {}) => {
   const filePath = await ensureYtDlpBinary();
+  const projBin = join(process.cwd(), "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
   const args = toYtDlpArgs(url, flags);
 
   // Log which executable and args we're using to help debug environments
@@ -101,6 +150,24 @@ const spawnJson = async (url, flags = {}) => {
 
     process2.on("close", (code) => {
       if (code !== 0) {
+        // If it failed because python3 is missing, try downloading official static binary into ./bin and retry once
+        const stderrLower = (errorOutput || "").toLowerCase();
+        if (!flags.__ytl_retried && /python3/.test(stderrLower)) {
+          console.warn("[YtDlpPlugin] yt-dlp appears to require python3. Attempting to download official yt-dlp binary to ./bin and retry...");
+          return downloadOfficialYtDlp(projBin)
+            .then(() => {
+              flags.__ytl_retried = true;
+              // retry using the new projBin
+              return spawnJson(url, flags).then(resolve).catch(reject);
+            })
+            .catch((dlErr) => {
+              const err = new Error(`yt-dlp failed and automatic binary download failed: ${dlErr.message}. stderr: ${errorOutput.trim()}`);
+              err.debug = { code, stdout: output.trim(), stderr: errorOutput.trim(), cmd: `${filePath} ${args.join(' ')}` };
+              console.error('[YtDlpPlugin] download failed', dlErr);
+              return reject(err);
+            });
+        }
+
         const err = new Error(errorOutput || output || `yt-dlp exited with code ${code}`);
         // attach debug info
         err.debug = { code, stdout: output.trim(), stderr: errorOutput.trim(), cmd: `${filePath} ${args.join(' ')}` };
