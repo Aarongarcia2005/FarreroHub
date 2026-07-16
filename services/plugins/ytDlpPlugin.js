@@ -78,6 +78,13 @@ const spawnJson = async (url, flags = {}) => {
   const filePath = await ensureYtDlpBinary();
   const args = toYtDlpArgs(url, flags);
 
+  // Log which executable and args we're using to help debug environments
+  try {
+    console.log(`[YtDlpPlugin] spawnJson will run: ${filePath} ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`);
+  } catch (e) {
+    // ignore logging errors
+  }
+
   return new Promise((resolve, reject) => {
     let output = "";
     let errorOutput = "";
@@ -94,7 +101,11 @@ const spawnJson = async (url, flags = {}) => {
 
     process2.on("close", (code) => {
       if (code !== 0) {
-        return reject(new Error(errorOutput || output || `yt-dlp exited with code ${code}`));
+        const err = new Error(errorOutput || output || `yt-dlp exited with code ${code}`);
+        // attach debug info
+        err.debug = { code, stdout: output.trim(), stderr: errorOutput.trim(), cmd: `${filePath} ${args.join(' ')}` };
+        console.error('[YtDlpPlugin] yt-dlp failed', err.debug);
+        return reject(err);
       }
 
       try {
@@ -104,7 +115,10 @@ const spawnJson = async (url, flags = {}) => {
         const jsonText = start >= 0 && end > start ? onlyJson.slice(start, end + 1) : onlyJson;
         resolve(JSON.parse(jsonText));
       } catch (parseError) {
-        reject(new Error(`Failed to parse yt-dlp JSON output. stderr: ${errorOutput.trim()} stdout: ${output.trim()}`));
+        const e = new Error(`Failed to parse yt-dlp JSON output. stderr: ${errorOutput.trim()} stdout: ${output.trim()}`);
+        e.debug = { stdout: output.trim(), stderr: errorOutput.trim() };
+        console.error('[YtDlpPlugin] Failed to parse JSON from yt-dlp', e.debug);
+        reject(e);
       }
     });
 
