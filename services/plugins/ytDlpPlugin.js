@@ -45,6 +45,34 @@ const { spawnSync } = require("child_process");
 const https = require("https");
 const { promises: fsPromises } = require("fs");
 
+const getYoutubeRequestOptions = () => ({
+  requestOptions: {
+    headers: {
+      'user-agent': UA_LIST[0],
+      referer: 'https://www.youtube.com/',
+      'accept-language': 'en-US,en;q=0.9'
+    }
+  }
+});
+
+const getYoutubeAudioStream = async (url) => {
+  const info = await ytdlCore.getInfo(url, getYoutubeRequestOptions());
+  const format = ytdlCore.chooseFormat(info.formats, { quality: 'highestaudio' });
+
+  if (format?.url) {
+    return format.url;
+  }
+
+  if (format?.signatureCipher || format?.cipher) {
+    return ytdlCore.downloadFromInfo(info, {
+      quality: 'highestaudio',
+      ...getYoutubeRequestOptions()
+    });
+  }
+
+  return null;
+};
+
 const ensureYtDlpBinary = async () => {
   const filePath = getYtDlpPath();
   const projBin = join(process.cwd(), "bin", `yt-dlp${process.platform === "win32" ? ".exe" : ""}`);
@@ -461,36 +489,50 @@ class YtDlpPlugin extends PlayableExtractorPlugin {
       throw new DisTubeError("YTDLP_PLUGIN_INVALID_SONG", "No se puede obtener la URL de reproducción de la canción.");
     }
 
-    const info = await spawnJson(song.url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      skipDownload: true,
-      simulate: true,
-      format: "ba/ba*"
-    }).catch((error) => {
-      throw new DisTubeError("YTDLP_ERROR", `${error.message}`);
-    });
+      let info;
+    try {
+      info = await spawnJson(song.url, {
+        dumpSingleJson: true,
+        noWarnings: true,
+        preferFreeFormats: true,
+        skipDownload: true,
+        simulate: true,
+        format: "ba/ba*"
+      });
+    } catch (error) {
+      console.warn('[YtDlpPlugin] yt-dlp failed for stream URL; trying ytdl-core fallback', error?.message || error);
+      info = null;
+    }
 
-    if (isPlaylist(info)) {
+    if (info && isPlaylist(info)) {
       throw new DisTubeError("YTDLP_ERROR", "No se puede obtener la URL de reproducción de una playlist.");
     }
 
-    if (info.url) return info.url;
+    if (info?.url) return info.url;
 
-    // Fallback: try using play-dl to get a readable stream for YouTube URLs
+    // Fallback: try using ytdl-core to obtain an audio stream directly for YouTube URLs
+    try {
+      if (/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(song.url)) {
+        console.log('[YtDlpPlugin] Falling back to ytdl-core stream for', song.url);
+        const stream = await getYoutubeAudioStream(song.url);
+        if (stream) return stream;
+      }
+    } catch (e) {
+      console.error('[YtDlpPlugin] ytdl-core stream fallback failed', e);
+    }
+
+    // Last resort: try play-dl stream for YouTube URLs
     try {
       if (/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(song.url)) {
         console.log('[YtDlpPlugin] Falling back to play-dl stream for', song.url);
         const r = await playdl.stream(song.url);
-        // r.stream is a readable stream which DisTube/FFmpeg can accept
         return r.stream;
       }
     } catch (e) {
       console.error('[YtDlpPlugin] play-dl fallback failed', e);
     }
 
-    return info.url;
+    return info?.url || null;
   }
 
   getRelatedSongs() {
